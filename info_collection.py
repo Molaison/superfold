@@ -22,7 +22,7 @@ class InfoCollector(object):
 
     _protocol_version = '1.0'
     _dropoff_dir = "/net/scratch/db/af2/data"
-    _collect_data_file = "/net/scratch/db/af2/config.json"
+    _collect_data_file = "/software/lab/superfold_dev/data_collection_config.json"
 
     def __init__(self,tag=None) -> None:
         """Initialize an InfoCollector object.
