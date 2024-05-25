@@ -1321,13 +1321,13 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     #pymol.cmd.delete("temp_target")
                     output_line += f" rmsd_to_reference:{rmsd:0.2f}"
                 
-                parsed_pdb_output.make_pdb_file("TEST_RAW_OUTPUT.pdb")
-                target.parsed_pdb.make_pdb_file("TEST_RAW_TARGET.pdb")
+                # parsed_pdb_output.make_pdb_file("TEST_RAW_OUTPUT.pdb")
+                # target.parsed_pdb.make_pdb_file("TEST_RAW_TARGET.pdb")
                 if target.parsed_pdb is not None:
                     
                     rmsd, tmscore, final_chain_order_mapping = MMalign(parsed_pdb_output, target.parsed_pdb)
                     parsed_pdb_output.remap_chains(final_chain_order_mapping)
-                    parsed_pdb_output.make_pdb_file("TEST_REMAPPED_OUTPUT.pdb")
+                    # parsed_pdb_output.make_pdb_file("TEST_REMAPPED_OUTPUT.pdb")
                     kabsch_rmsd = parsed_pdb_output.rmsd_kabsch(target.parsed_pdb)
 
                     #out_dict["mmalign_rmsd_to_input"] = rmsd
@@ -1340,7 +1340,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     outs[key]["tmscore_to_input"] = tmscore
 
                     #pymol.cmd.delete("temp_target")
-                    output_line += f" rmsd_to_input:{rmsd:0.2f}"
+                    output_line += f" rmsd_to_input:{kabsch_rmsd:0.2f}"
                 
                 #re-extract the per-residue lddt values from the b-factor column of the pdb
                 plddt_list = parsed_pdb_output.get_bfactors()
