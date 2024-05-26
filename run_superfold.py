@@ -1510,6 +1510,29 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                 # go through each model
                 for num, model_name in enumerate(model_names):
 
+                    model_mod = ""
+                    if args.type == "monomer_ptm":
+                        model_mod = "_ptm"
+                    elif args.type == "multimer":
+                        model_mod = "_multimer"
+                    elif args.type == "multimer_v2":
+                        model_mod = "_multimer_v2"
+                    model_name = model_name + model_mod
+                    key = f"{model_name}_seed_{seed}"
+                    
+                    # check if this prediction/seed has already been done
+                    prefix = f"{name}_{key}"
+                    if not args.overwrite and os.path.exists(
+                        os.path.join(args.out_dir, f"{prefix}_prediction_results.json")
+                    ):
+                        print("", flush=True)
+                        print(f"{prefix}_prediction_results.json already exists", flush=True)
+                        #flush the progress bar
+                        print(flush=True)
+                        pbar2.update(1)
+                        continue
+
+                    pbar2.set_description(f"Running {key}")
 
                     info_recorder = InfoCollector()
                     info_recorder['sequence'] = target.seq
@@ -1525,25 +1548,6 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     info_recorder['used-templates'] = False
                     info_recorder['output-number'] = output_counter
                     info_recorder['af2-version'] = args.type
-
-                    model_mod = ""
-                    if args.type == "monomer_ptm":
-                        model_mod = "_ptm"
-                    elif args.type == "multimer":
-                        model_mod = "_multimer"
-                    elif args.type == "multimer_v2":
-                        model_mod = "_multimer_v2"
-                    model_name = model_name + model_mod
-                    key = f"{model_name}_seed_{seed}"
-                    pbar2.set_description(f"Running {key}")
-
-                    # check if this prediction/seed has already been done
-                    prefix = f"{name}_{key}"
-                    if not args.overwrite and os.path.exists(
-                        os.path.join(args.out_dir, f"{prefix}_prediction_results.json")
-                    ):
-                        print(f"{prefix}_prediction_results.json already exists")
-                        continue
 
                     # replace model parameters
                     params = data.get_model_haiku_params(
