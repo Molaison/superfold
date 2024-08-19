@@ -20,7 +20,7 @@ class InfoCollector(object):
     This one will be written specifically for collecting info about an AF2 job.
     """
 
-    _protocol_version = '1.0'
+    _protocol_version = '1.1'
     _dropoff_dir = "/net/scratch/db/af2/data"
     _collect_data_file = "/software/lab/superfold_dev/data_collection_config.json"
 
@@ -46,7 +46,9 @@ class InfoCollector(object):
         padded-length: INT
         seed: INT
         input-pdb: STRING
-        source: STRING
+        input-path: STRING
+        output-pdb: STRING
+        output-path: STRING
         pLDDT: LIST of FLOAT
         LDDT: FLOAT
         model-num: INT
@@ -127,7 +129,9 @@ class InfoCollector(object):
         self._info['padded-length'] = None
         self._info['seed'] = None
         self._info['input-pdb'] = None
-        self._info['source'] = None
+        self._info['input-path'] = None
+        self._info['output-pdb'] = None
+        self._info['output-path'] = None
         self._info['pLDDT'] = None
         self._info['LDDT'] = None
         self._info['model-num'] = None

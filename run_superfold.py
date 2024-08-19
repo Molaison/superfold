@@ -229,6 +229,9 @@ assert args.mock_msa_depth > 0
 from pathlib import Path
 import sys
 
+import warnings
+warnings.filterwarnings("ignore")
+
 sys.path.insert(0, str(Path(__file__).resolve().parent / "silent_tools"))
 import silent_tools  # installed as a submodule
 from dataclasses import dataclass
@@ -432,7 +435,7 @@ class ParsedPDB:
         #return per-residue b-factors?
         bfacs = []
         for atom in self.atom_details:
-            if atom[0] == "ATOM" and atom[2] == " CA ":
+            if atom[0] and atom[2] == ' CA ':
                 bfacs.append(atom[6])
         return np.array(bfacs)
 
@@ -1246,7 +1249,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
         with tqdm.tqdm(total=total) as pbar2:
             outs = {}
 
-            def report(key):
+            def report(key, info_recorder):
                 pbar2.update(n=1)
                 o = outs[key]
                 out_dict = {}
@@ -1311,6 +1314,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     #out_dict["mmalign_rmsd_to_reference"] = rmsd
                     out_dict["rmsd_to_reference"] = kabsch_rmsd
                     out_dict["tmscore_to_reference"] = tmscore
+                    info_recorder['mmalign_rmsd'] = rmsd
 
                     #send this back up for the info-recorder
                     if target.parsed_pdb is None:
@@ -1338,6 +1342,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     #outs[key]["mmalign_rmsd_to_input"] = rmsd
                     outs[key]["rmsd_to_input"] = kabsch_rmsd
                     outs[key]["tmscore_to_input"] = tmscore
+                    info_recorder['mmalign_rmsd'] = rmsd #overwrite the reference rmsd if it was saved
 
                     #pymol.cmd.delete("temp_target")
                     output_line += f" rmsd_to_input:{kabsch_rmsd:0.2f}"
@@ -1345,6 +1350,7 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                 #re-extract the per-residue lddt values from the b-factor column of the pdb
                 plddt_list = parsed_pdb_output.get_bfactors()
                 outs[key]["plddts"] = plddt_list
+                info_recorder['pLDDT'] = plddt_list
 
                 # with open(fout_name, "w") as f:
                 #     f.write(output_pdbstr)
@@ -1468,6 +1474,9 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                         f.write(output_line + "\n")
                 print(output_line)
 
+                info_recorder['output-pdb'] = parsed_pdb_output.get_pdbstr()
+                info_recorder['output-path'] = os.path.realpath(fout_name)
+
                 out_dict["elapsed_time"] = elapsed_time
 
                 with open(
@@ -1538,10 +1547,10 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     info_recorder['sequence'] = target.seq
                     info_recorder['padded-length'] = max_length
                     info_recorder['seed'] = seed
-                    info_recorder['source'] = target.input_path
                     if target.parsed_pdb is not None:
-                        #get the pdb string of the input structure as pymol has saved it
-                        info_recorder['input-pdb'] = target.parsed_pdb.name
+                        #get the pdb string of the input structure 
+                        info_recorder['input-path'] = os.path.realpath(target.input_path)
+                        info_recorder['input-pdb'] = target.parsed_pdb.get_pdbstr()
                     info_recorder['model-num'] =  model_name
                     info_recorder['used-msa'] = False
                     info_recorder['used-initial-guess'] = bool(args.initial_guess)
@@ -1579,12 +1588,13 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     # save results
                     outs[key] = parse_results(prediction_result, processed_feature_dict)
                     outs[key].update({"recycles": r, "tol": t})
-                    report(key)
+                    report(key, info_recorder)
                     output_counter += 1
 
-                    info_recorder['pLDDT'] = outs[key]['plddts']
+                    
 
                     #pLDDT is currently a list of all atoms, but we want to report the pLDDT of the Ca atoms only
+
 
 
                     #info_recorder['LDDT'] = outs[key]['lddts'] #to be implemented
