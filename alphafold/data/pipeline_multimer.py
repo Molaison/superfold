@@ -79,7 +79,7 @@ def convert_monomer_features(
 ) -> pipeline.FeatureDict:
     """Reshapes and modifies monomer features for multimer models."""
     converted = {}
-    converted["auth_chain_id"] = np.asarray(chain_id, dtype=np.object_)
+    converted["auth_chain_id"] = np.asarray(chain_id, dtype=object)
     unnecessary_leading_dim_feats = {
         "sequence",
         "domain_name",
