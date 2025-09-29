@@ -67,8 +67,6 @@ class InfoCollector(object):
 
         collection_configuration = json.load(open(self._collect_data_file))
         self._run_collection_flag = collection_configuration['run_collection']
-        if not self._run_collection_flag:
-            return
 
         self._time_start = time.time()
         self._process = psutil.Process(os.getpid())
