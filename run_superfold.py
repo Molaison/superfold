@@ -802,6 +802,8 @@ import tqdm
 import jax
 from jax.lib import xla_bridge
 
+print("JAX allocator:", os.environ.get("XLA_PYTHON_CLIENT_ALLOCATOR", "<default>"))
+
 device = xla_bridge.get_backend().platform
 print("using ", device)
 
