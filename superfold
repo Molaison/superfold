@@ -19,7 +19,9 @@ case $cluster in
 
 	digs)
 		#python_interpreter="/home/rdkibler/.conda/envs/pyroml/bin/python3.8"
-		python_interpreter="/net/software/lab/superfold/pyroml/bin/python3.8"
+		#python_interpreter="/net/software/lab/superfold/pyroml/bin/python3.8"
+        	#python_interpreter="/software/containers/shifty.sif"
+		python_interpreter="/software/containers/universal.sif"
 	;;
 
 	perlmutter)
