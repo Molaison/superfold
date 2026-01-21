@@ -29,6 +29,37 @@ of silent_tools, so you could remove the pyrosetta line from the .yml and be fin
 11) `$cd mmalign`
 12) `g++ -static -O3 -ffast-math -lm -o MMalign MMalign.cpp`
 
+## Easy run directory workflow (recommended)
+
+This repo ships a small helper script (modeled after `001_prepare_af3_input.py`) to make batch runs easier on clusters:
+
+- `001_prepare_superfold_run.py`: prepares a numbered `*_superfold_run/` directory with:
+  - `inputs/` (FASTA records chunked to reduce small files) + `inputs/file_list.txt`
+  - `outputs/` (SuperFold outputs)
+  - `scripts/run_prediction.sh` (Slurm array script; dynamic per-task file assignment)
+  - `scripts/run_prediction_local.sh` (sequential local runner)
+- `003_run_local.py`: optional local Slurm-array simulator (multi-GPU capable)
+
+### Prepare a run
+
+```bash
+python 001_prepare_superfold_run.py -i inputs.fasta --weights-dir /path/to/alphafold_weights
+```
+
+### Run on Slurm
+
+```bash
+cd 001_superfold_run/scripts
+sbatch --array=1-4 run_prediction.sh
+```
+
+### Run locally (no Slurm)
+
+```bash
+cd 001_superfold_run/scripts
+bash run_prediction_local.sh 4
+```
+
 ### Model parameters
 
 While the AlphaFold code is licensed under the Apache 2.0 License, the AlphaFold
