@@ -63,8 +63,20 @@ class InfoCollector(object):
 
         """
 
-        collection_configuration = json.load(open(self._collect_data_file))
-        self._run_collection_flag = collection_configuration['run_collection']
+        # Default state (safe even if collection is disabled).
+        self._run_collection_flag = False
+        self._info = {}
+
+        # On some clusters this file exists and controls whether telemetry is collected.
+        # When running outside those environments, default to "off" so SuperFold can run
+        # without requiring a shared scratch config.
+        if "SUPERFOLD_RUN_COLLECTION" in os.environ:
+            self._run_collection_flag = os.environ["SUPERFOLD_RUN_COLLECTION"].strip() not in ("0", "false", "False", "")
+        elif os.path.exists(self._collect_data_file):
+            collection_configuration = json.load(open(self._collect_data_file))
+            self._run_collection_flag = bool(collection_configuration.get("run_collection", False))
+        else:
+            self._run_collection_flag = False
         if not self._run_collection_flag:
             return
 
@@ -252,10 +264,14 @@ class InfoCollector(object):
 
     def __getitem__(self, key):
         """Get an item from the info dict."""
+        if not getattr(self, "_run_collection_flag", False):
+            raise KeyError(key)
         return self._info[key]
     
     def __setitem__(self, key, value):
         """Set an item in the info dict."""
+        if not getattr(self, "_run_collection_flag", False):
+            return
         if key in self._info:
             self._info[key] = value
         else :

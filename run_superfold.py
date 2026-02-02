@@ -1321,8 +1321,9 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                     #pymol.cmd.delete("temp_target")
                     output_line += f" rmsd_to_reference:{rmsd:0.2f}"
                 
-                parsed_pdb_output.make_pdb_file("TEST_RAW_OUTPUT.pdb")
-                target.parsed_pdb.make_pdb_file("TEST_RAW_TARGET.pdb")
+                # Debug artifacts (write raw PDBs) were previously unconditional and
+                # would crash for FASTA-only inputs (target.parsed_pdb is None).
+                # Keep SuperFold runnable in common FASTA workflows by disabling this.
                 if target.parsed_pdb is not None:
                     
                     rmsd, tmscore, final_chain_order_mapping = MMalign(parsed_pdb_output, target.parsed_pdb)
