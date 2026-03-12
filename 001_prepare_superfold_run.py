@@ -25,6 +25,7 @@ import json
 import os
 import re
 import shlex
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple
@@ -183,6 +184,70 @@ def ensure_weights_pointer(superfold_root: Path, weights_dir: Optional[Path]) ->
     return weights_pth
 
 
+def prepare_initial_guess_path(run_dir: Path, initial_guess: object) -> Tuple[object, Optional[dict]]:
+    """
+    Normalize the --initial-guess argument.
+
+    - If `initial_guess` is True/False: passthrough (SuperFold flag behavior).
+    - If it's a path:
+        - accept PDB directly
+        - accept AF3 mmCIF (.cif/.mmcif) and convert to PDB inside the run directory
+
+    Returns:
+        (initial_guess_for_superfold, metadata_dict_or_none)
+    """
+    if initial_guess is False or initial_guess is True:
+        return initial_guess, None
+
+    src = Path(str(initial_guess)).expanduser().resolve()
+    if not src.exists():
+        raise FileNotFoundError(f"--initial-guess not found: {src}")
+
+    suffix = src.name.lower()
+    if suffix.endswith((".cif", ".mmcif")):
+        try:
+            import gemmi  # type: ignore
+        except ModuleNotFoundError as e:
+            raise ModuleNotFoundError(
+                "gemmi is required to use an mmCIF file as --initial-guess. "
+                "Install gemmi or convert to PDB and pass the PDB path."
+            ) from e
+
+        out_dir = run_dir / "inputs" / "initial_guess"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        dst = out_dir / f"{src.stem}.pdb"
+
+        structure = gemmi.read_structure(str(src))
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".pdb", prefix=f"{src.stem}_", dir=str(out_dir), delete=False
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+        try:
+            structure.write_pdb(str(tmp_path))
+            tmp_path.replace(dst)
+        finally:
+            if tmp_path.exists() and tmp_path != dst:
+                tmp_path.unlink()
+
+        return (
+            str(dst),
+            {
+                "source": str(src),
+                "source_type": "mmcif",
+                "converted_pdb": str(dst),
+            },
+        )
+
+    return (
+        str(src),
+        {
+            "source": str(src),
+            "source_type": "pdb_or_other",
+            "used_as": str(src),
+        },
+    )
+
+
 def render_run_prediction_sh(
     *,
     run_dir: Path,
@@ -322,7 +387,19 @@ def main() -> int:
     parser.add_argument("--enable-dropout", action="store_true", help="SuperFold: --enable_dropout")
     parser.add_argument("--pct-seq-mask", type=float, default=0.15, help="SuperFold: --pct_seq_mask")
     parser.add_argument("--overwrite", action="store_true", help="SuperFold: --overwrite (otherwise checkpoints by default)")
-    parser.add_argument("--initial-guess", nargs="?", const=True, default=False, help="SuperFold: --initial_guess [PATH|true]")
+    parser.add_argument(
+        "--initial-guess",
+        nargs="?",
+        const=True,
+        default=False,
+        help="SuperFold: --initial_guess [PDB|mmCIF|true]. If mmCIF is provided, it will be converted to PDB inside the run directory.",
+    )
+    parser.add_argument(
+        "--initial-guess-lock-chains",
+        type=str,
+        default="",
+        help="SuperFold: --initial_guess_lock_chains (e.g. 'A' or 'A,B') to lock target chain(s) to the initial guess.",
+    )
     parser.add_argument("--reference-pdb", type=str, default=None, help="SuperFold: --reference_pdb PATH")
 
     args = parser.parse_args()
@@ -349,6 +426,7 @@ def main() -> int:
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     weights_pointer = ensure_weights_pointer(superfold_root, args.weights_dir)
+    initial_guess_value, initial_guess_meta = prepare_initial_guess_path(run_dir, args.initial_guess)
 
     # Collect inputs and normalize FASTA into chunks inside run_dir.
     input_files = collect_input_files(args.input.expanduser().resolve(), args.recursive)
@@ -365,6 +443,7 @@ def main() -> int:
         "notes": "FASTA headers are sanitized into safe names used for SuperFold output prefixes.",
         "records": [],
         "non_fasta_inputs": [],
+        "initial_guess": initial_guess_meta,
     }
 
     # Create stable, safe paths under inputs/.
@@ -448,11 +527,15 @@ def main() -> int:
         extra_args.append("--enable_dropout")
     if args.overwrite:
         extra_args.append("--overwrite")
-    if args.initial_guess is not False:
+    if initial_guess_value is not False:
         # Either True (flag only) or a path.
         extra_args += ["--initial_guess"]
-        if args.initial_guess is not True:
-            extra_args.append(str(args.initial_guess))
+        if initial_guess_value is not True:
+            extra_args.append(str(initial_guess_value))
+        if args.initial_guess_lock_chains:
+            extra_args += ["--initial_guess_lock_chains", str(args.initial_guess_lock_chains)]
+    elif args.initial_guess_lock_chains:
+        raise SystemExit("--initial-guess-lock-chains requires --initial-guess")
     if args.reference_pdb:
         extra_args += ["--reference_pdb", str(args.reference_pdb)]
 

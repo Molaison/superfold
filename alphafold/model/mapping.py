@@ -75,7 +75,9 @@ def sharded_map(
     Returns:
       function with smap applied.
     """
-    vmapped_fun = hk.vmap(fun, in_axes, out_axes)
+    # Haiku >= 0.0.12 requires `split_rng` to be explicit.
+    # AlphaFold's vmapped modules generally manage RNGs outside of vmap.
+    vmapped_fun = hk.vmap(fun, in_axes, out_axes, split_rng=False)
     return sharded_apply(vmapped_fun, shard_size, in_axes, out_axes)
 
 

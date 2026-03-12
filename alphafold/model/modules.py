@@ -299,6 +299,8 @@ class AlphaFold(hk.Module):
         ensemble_representations=False,
         return_representations=False,
         initial_guess=None,
+        initial_guess_lock_mask=None,
+        initial_guess_atom_mask=None,
     ):
         """Run the AlphaFold model.
 
@@ -323,6 +325,24 @@ class AlphaFold(hk.Module):
 
         impl = AlphaFoldIteration(self.config, self.global_config)
         batch_size, num_residues = batch["aatype"].shape
+
+        def _blend_with_initial_guess(pos):
+            """Blend selected atoms/residues with the provided initial guess.
+
+            This is used for a strong "lock" mode where a subset of residues
+            (typically a target chain) is kept fixed to the initial guess across
+            recycling and in the final output.
+            """
+            if initial_guess is None or initial_guess_lock_mask is None:
+                return pos
+            lock = initial_guess_lock_mask.astype(pos.dtype)
+            lock = lock.reshape((lock.shape[0], 1))  # [N, 1]
+            if initial_guess_atom_mask is not None:
+                atom_lock = lock * initial_guess_atom_mask.astype(pos.dtype)  # [N, 37]
+            else:
+                atom_lock = lock  # [N, 1] (broadcast over atoms)
+            atom_lock = atom_lock[:, :, None]  # [N, 37|1, 1] -> broadcast over xyz
+            return pos * (1.0 - atom_lock) + initial_guess.astype(pos.dtype) * atom_lock
 
         def get_prev(ret):
             new_prev = {
@@ -360,8 +380,11 @@ class AlphaFold(hk.Module):
         emb_config = self.config.embeddings_and_evoformer
         # Nate insertion
         prev_pos = jnp.zeros([num_residues, residue_constants.atom_type_num, 3])
-        if emb_config.initial_guess:
+        if emb_config.initial_guess and initial_guess is not None:
+            if initial_guess_lock_mask is None:
                 prev_pos += initial_guess
+            else:
+                prev_pos = _blend_with_initial_guess(prev_pos)
     
         # we can implement per-recycle checkpointing by dumping and loading this dict! #TODO
         prev = {
@@ -396,6 +419,11 @@ class AlphaFold(hk.Module):
             def body(x):
                 n, tol, prev = x
                 prev_ = get_prev(do_call(prev, recycle_idx=n, compute_loss=False))
+                # Strong lock mode: keep selected residues (e.g. target chain)
+                # anchored to the initial guess across recycling.
+                if emb_config.initial_guess and initial_guess_lock_mask is not None:
+                    prev_ = dict(prev_)
+                    prev_["prev_pos"] = _blend_with_initial_guess(prev_["prev_pos"])
                 ca, ca_ = prev["prev_pos"][:, 1, :], prev_["prev_pos"][:, 1, :]
                 tol_ = jnp.sqrt(jnp.square(pw_dist(ca) - pw_dist(ca_)).mean())
                 return n + 1, tol_, prev_
@@ -415,6 +443,25 @@ class AlphaFold(hk.Module):
             (recycles, tol) = 0, jnp.inf
 
         ret = do_call(prev=prev, recycle_idx=num_iter)
+        # Strong lock mode: ensure final atom positions are identical to the
+        # initial guess for the locked subset.
+        if emb_config.initial_guess and initial_guess_lock_mask is not None:
+            if compute_loss:
+                loss, out = ret
+                out = dict(out)
+                sm = dict(out["structure_module"])
+                sm["final_atom_positions"] = _blend_with_initial_guess(
+                    sm["final_atom_positions"]
+                )
+                out["structure_module"] = sm
+                ret = (loss, out)
+            else:
+                ret = dict(ret)
+                sm = dict(ret["structure_module"])
+                sm["final_atom_positions"] = _blend_with_initial_guess(
+                    sm["final_atom_positions"]
+                )
+                ret["structure_module"] = sm
         if compute_loss:
             ret = ret[0], [ret[1]]
 

@@ -438,7 +438,16 @@ class AlphaFold(hk.Module):
         self.config = config
         self.global_config = config.global_config
 
-    def __call__(self, batch, is_training, return_representations=False, safe_key=None, initial_guess=None):
+    def __call__(
+        self,
+        batch,
+        is_training,
+        return_representations=False,
+        safe_key=None,
+        initial_guess=None,
+        initial_guess_lock_mask=None,
+        initial_guess_atom_mask=None,
+    ):
 
         c = self.config
         impl = AlphaFoldIteration(c, self.global_config)
@@ -450,6 +459,18 @@ class AlphaFold(hk.Module):
 
         assert isinstance(batch, dict)
         num_res = batch["aatype"].shape[0]
+
+        def _blend_with_initial_guess(pos):
+            if initial_guess is None or initial_guess_lock_mask is None:
+                return pos
+            lock = initial_guess_lock_mask.astype(pos.dtype)
+            lock = lock.reshape((lock.shape[0], 1))  # [N, 1]
+            if initial_guess_atom_mask is not None:
+                atom_lock = lock * initial_guess_atom_mask.astype(pos.dtype)  # [N, 37]
+            else:
+                atom_lock = lock  # [N, 1] (broadcast over atoms)
+            atom_lock = atom_lock[:, :, None]  # [N, 37|1, 1]
+            return pos * (1.0 - atom_lock) + initial_guess.astype(pos.dtype) * atom_lock
 
         def get_prev(ret):
             new_prev = {
@@ -468,8 +489,11 @@ class AlphaFold(hk.Module):
         if self.config.num_recycle:
             emb_config = self.config.embeddings_and_evoformer
             prev_pos = jnp.zeros([num_res, residue_constants.atom_type_num, 3])
-            if emb_config.initial_guess:
-                prev_pos += initial_guess
+            if emb_config.initial_guess and initial_guess is not None:
+                if initial_guess_lock_mask is None:
+                    prev_pos += initial_guess
+                else:
+                    prev_pos = _blend_with_initial_guess(prev_pos)
             prev = {
                 "prev_pos": prev_pos,
                 "prev_msa_first_row": jnp.zeros([num_res, emb_config.msa_channel]),
@@ -503,6 +527,9 @@ class AlphaFold(hk.Module):
                 )  # pylint: disable=line-too-long
                 ret = apply_network(prev=prev, safe_key=safe_key2)
                 prev_ = get_prev(ret)
+                if emb_config.initial_guess and initial_guess_lock_mask is not None:
+                    prev_ = dict(prev_)
+                    prev_["prev_pos"] = _blend_with_initial_guess(prev_["prev_pos"])
                 ca, ca_ = prev["prev_pos"][:, 1, :], prev_["prev_pos"][:, 1, :]
                 tol_ = jnp.sqrt(jnp.square(pw_dist(ca) - pw_dist(ca_)).mean())
                 return prev_, safe_key1, n + 1, tol_
@@ -524,8 +551,16 @@ class AlphaFold(hk.Module):
             prev = {}
             (recycles, tol) = 0, jnp.inf
 
-        # Run extra iteration.
         ret = apply_network(prev=prev, safe_key=safe_key)
+        if self.config.num_recycle:
+            emb_config = self.config.embeddings_and_evoformer
+            if emb_config.initial_guess and initial_guess_lock_mask is not None:
+                ret = dict(ret)
+                sm = dict(ret["structure_module"])
+                sm["final_atom_positions"] = _blend_with_initial_guess(
+                    sm["final_atom_positions"]
+                )
+                ret["structure_module"] = sm
 
         if not return_representations:
             del ret["representations"]

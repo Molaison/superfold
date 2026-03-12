@@ -84,18 +84,30 @@ class RunModel:
         # TODO add the ability to return_representations for multimers
         if self.multimer_mode:
 
-            def _forward_fn(batch, initial_guess=None):
+            def _forward_fn(
+                batch,
+                initial_guess=None,
+                initial_guess_lock_mask=None,
+                initial_guess_atom_mask=None,
+            ):
                 model = modules_multimer.AlphaFold(self.config.model)
                 return model(
                     batch,
                     is_training=is_training,
                     return_representations=return_representations,
                     initial_guess=initial_guess,
+                    initial_guess_lock_mask=initial_guess_lock_mask,
+                    initial_guess_atom_mask=initial_guess_atom_mask,
                 )
 
         else:
 
-            def _forward_fn(batch, initial_guess=None):
+            def _forward_fn(
+                batch,
+                initial_guess=None,
+                initial_guess_lock_mask=None,
+                initial_guess_atom_mask=None,
+            ):
                 model = modules.AlphaFold(self.config.model)
                 return model(
                     batch,
@@ -103,6 +115,8 @@ class RunModel:
                     compute_loss=False,
                     ensemble_representations=True,
                     initial_guess=initial_guess,
+                    initial_guess_lock_mask=initial_guess_lock_mask,
+                    initial_guess_atom_mask=initial_guess_atom_mask,
                     return_representations=return_representations,
                 )
 
@@ -171,6 +185,8 @@ class RunModel:
         feat: features.FeatureDict,
         random_seed: int,
         initial_guess=None,
+        initial_guess_lock_mask=None,
+        initial_guess_atom_mask=None,
     ) -> Mapping[str, Any]:
         """Makes a prediction by inferencing the model on the provided features.
 
@@ -194,6 +210,8 @@ class RunModel:
             jax.random.PRNGKey(random_seed),
             feat,
             initial_guess=initial_guess,
+            initial_guess_lock_mask=initial_guess_lock_mask,
+            initial_guess_atom_mask=initial_guess_atom_mask,
         )
         # This block is to ensure benchmark timings are accurate. Some blocking is
         # already happening when computing get_confidence_metrics, and this ensures

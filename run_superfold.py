@@ -175,6 +175,12 @@ parser.add_argument(
     help="use the initial guess from the input PDB file. This is useful for trying to focus predictions toward a known conformation. If no path is provided, the input_file must be a PDB or silent. If a path is provided, the input must be a fasta.",
 )
 parser.add_argument(
+    "--initial_guess_lock_chains",
+    type=str,
+    default="",
+    help="Comma/space-separated chain IDs (e.g. 'A' or 'A,B') to lock to the initial guess across recycling and in the final output. Requires --initial_guess. Chain IDs follow input order (A=first chain, B=second, ...).",
+)
+parser.add_argument(
     "--reference_pdb",
     type=str,
     help="reference PDB to use for RMSD calculations. Coordinates (after alignment) and chain order will be updated to that of this reference, unless the input_files are PDB files",
@@ -225,6 +231,16 @@ if args.amber_relax:
 args.save_intermediates = False
 
 assert args.mock_msa_depth > 0
+
+# Normalize/validate initial-guess lock chains.
+import re
+if args.initial_guess_lock_chains:
+    if not args.initial_guess:
+        raise ValueError("--initial_guess_lock_chains requires --initial_guess")
+    _parts = re.split(r"[,\\s]+", args.initial_guess_lock_chains.strip().upper())
+    args.initial_guess_lock_chains = [p for p in _parts if p]
+else:
+    args.initial_guess_lock_chains = []
 
 from pathlib import Path
 import sys
@@ -941,45 +957,57 @@ def af2_get_atom_positions(parsed_pdb) -> Tuple[np.ndarray, np.ndarray]:
 
     lines = parsed_pdb.get_pdbstr().splitlines()
 
-    # indices of residues observed in the structure
-    idx_s = [
-        int(l[22:26]) for l in lines if l[:4] == "ATOM" and l[12:16].strip() == "CA"
-    ]
-    num_res = len(idx_s)
-
-    all_positions = np.zeros([num_res, residue_constants.atom_type_num, 3])
-    all_positions_mask = np.zeros(
-        [num_res, residue_constants.atom_type_num], dtype=np.int64
-    )
-
-    residues = collections.defaultdict(list)
-    # 4 BB + up to 10 SC atoms
-    xyz = np.full((len(idx_s), 14, 3), np.nan, dtype=np.float32)
+    # Indices of residues observed in the structure.
+    #
+    # IMPORTANT: residue numbers can repeat across chains (e.g. chain A 1..N and
+    # chain B 1..M). The previous implementation keyed only on residue number,
+    # which collapses chains and silently corrupts the coordinate map for
+    # multi-chain structures. This breaks `--initial_guess` for FASTA inputs.
+    #
+    # We disambiguate residues by (chain_id, resseq, insertion_code) and preserve
+    # the CA order as it appears in the PDB string.
+    idx_keys = []
     for l in lines:
         if l[:4] != "ATOM":
             continue
-        resNo, atom, aa = int(l[22:26]), l[12:16], l[17:20]
+        if l[12:16].strip() != "CA":
+            continue
+        chain_id = l[21]
+        resseq = int(l[22:26])
+        icode = l[26]
+        idx_keys.append((chain_id, resseq, icode))
 
-        residues[resNo].append(
-            (atom.strip(), aa, [float(l[30:38]), float(l[38:46]), float(l[46:54])])
+    residues = collections.defaultdict(list)
+    for l in lines:
+        if l[:4] != "ATOM":
+            continue
+        chain_id = l[21]
+        resseq = int(l[22:26])
+        icode = l[26]
+        resname = l[17:20].strip()
+        atom_name = l[12:16].strip()
+        residues[(chain_id, resseq, icode)].append(
+            (atom_name, resname, [float(l[30:38]), float(l[38:46]), float(l[46:54])])
         )
 
-    for resNo in residues:
+    num_res = len(idx_keys)
+    all_positions = np.zeros([num_res, residue_constants.atom_type_num, 3], dtype=np.float32)
+    all_positions_mask = np.zeros([num_res, residue_constants.atom_type_num], dtype=np.float32)
+
+    for idx, key in enumerate(idx_keys):
         pos = np.zeros([residue_constants.atom_type_num, 3], dtype=np.float32)
         mask = np.zeros([residue_constants.atom_type_num], dtype=np.float32)
 
-        for atom in residues[resNo]:
-            atom_name = atom[0]
-            x, y, z = atom[2]
-            if atom_name in residue_constants.atom_order.keys():
+        for atom_name, resname, xyz in residues.get(key, []):
+            x, y, z = xyz
+            if atom_name in residue_constants.atom_order:
                 pos[residue_constants.atom_order[atom_name]] = [x, y, z]
                 mask[residue_constants.atom_order[atom_name]] = 1.0
-            elif atom_name.upper() == "SE" and res.get_resname() == "MSE":
+            elif atom_name.upper() == "SE" and resname == "MSE":
                 # Put the coordinates of the selenium atom in the sulphur column.
                 pos[residue_constants.atom_order["SD"]] = [x, y, z]
                 mask[residue_constants.atom_order["SD"]] = 1.0
 
-        idx = idx_s.index(resNo)  # This is the order they show up in the pdb
         all_positions[idx] = pos
         all_positions_mask[idx] = mask
     # _check_residue_distances(
@@ -1013,6 +1041,20 @@ def af2_all_atom(parsed_pdb,pad_to=None):
         ]  # assign target indices to template coordinates
 
     return jnp.array(templates_all_atom_positions)
+
+def af2_all_atom_and_mask(parsed_pdb, pad_to=None):
+    """Return (all_atom_positions, all_atom_mask) padded to `pad_to`."""
+    template_seq = parsed_pdb.get_seq().replace("/", "")
+    all_atom_positions, all_atom_mask = af2_get_atom_positions(parsed_pdb)
+
+    pad_length = pad_to if pad_to is not None else len(template_seq)
+    assert pad_length >= len(template_seq)
+
+    pos = np.zeros([pad_length, residue_constants.atom_type_num, 3], dtype=np.float32)
+    mask = np.zeros([pad_length, residue_constants.atom_type_num], dtype=np.float32)
+    pos[: all_atom_positions.shape[0]] = all_atom_positions
+    mask[: all_atom_mask.shape[0]] = all_atom_mask
+    return jnp.array(pos), jnp.array(mask)
 
 
 def mk_mock_template(query_sequence):
@@ -1087,6 +1129,13 @@ if type(args.initial_guess) == str:
 
 max_length = max([len(tgt) for tgt in query_targets])
 
+initial_guess_positions_padded = None
+initial_guess_atom_mask_padded = None
+if type(args.initial_guess) == str:
+    initial_guess_positions_padded, initial_guess_atom_mask_padded = af2_all_atom_and_mask(
+        parsed_pdb_initial_guess, pad_to=max_length
+    )
+
 
 if args.type == "multimer" or args.type == "multimer_v2":
     model_name = "model_5_multimer"
@@ -1151,13 +1200,37 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
         # define input features
         #############################
 
-        if not args.initial_guess:  # initial guess is False by default
-            initial_guess = None
-        elif type(args.initial_guess) == str:  # use the provided pdb
-            initial_guess = af2_all_atom(parsed_pdb_initial_guess,pad_to=max_length)
-        else:  # use the target structure
-            print("Using target structure as initial guess")
-            initial_guess = af2_all_atom(target.parsed_pdb,pad_to=max_length)
+        initial_guess = None
+        initial_guess_atom_mask = None
+        initial_guess_lock_mask = None
+
+        if args.initial_guess:  # initial guess is False by default
+            if type(args.initial_guess) == str:  # use the provided pdb
+                initial_guess = initial_guess_positions_padded
+                initial_guess_atom_mask = initial_guess_atom_mask_padded
+            else:  # use the target structure
+                print("Using target structure as initial guess")
+                initial_guess, initial_guess_atom_mask = af2_all_atom_and_mask(
+                    target.parsed_pdb, pad_to=max_length
+                )
+
+            if args.initial_guess_lock_chains:
+                valid_chain_ids = set(protein.PDB_CHAIN_IDS[: len(query_sequences)])
+                unknown = set(args.initial_guess_lock_chains) - valid_chain_ids
+                if unknown:
+                    raise ValueError(
+                        f"--initial_guess_lock_chains contains unknown chain IDs {sorted(unknown)} "
+                        f"for this target (num_chains={len(query_sequences)} valid={sorted(valid_chain_ids)})"
+                    )
+                lock = set(args.initial_guess_lock_chains)
+                mask = np.zeros([max_length], dtype=np.float32)
+                offset = 0
+                for chain_idx, chain_seq in enumerate(query_sequences):
+                    chain_id = protein.PDB_CHAIN_IDS[chain_idx]
+                    if chain_id in lock:
+                        mask[offset : offset + len(chain_seq)] = 1.0
+                    offset += len(chain_seq)
+                initial_guess_lock_mask = jnp.array(mask)
 
         num_res = len(full_sequence)
         feature_dict = {}
@@ -1181,9 +1254,6 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
             feature_dict["residue_index"] = cf.chain_break(
                 feature_dict["residue_index"], Ls
             )
-
-            if args.initial_guess:
-                feature_dict.update(mk_mock_template(query_sequences))
 
         ###########################
         # run alphafold
@@ -1560,6 +1630,8 @@ with tqdm.tqdm(total=len(query_targets)) as pbar1:
                                 processed_feature_dict,
                                 random_seed=seed,
                                 initial_guess=initial_guess,
+                                initial_guess_lock_mask=initial_guess_lock_mask,
+                                initial_guess_atom_mask=initial_guess_atom_mask,
                             ),
                             device,
                         )  # is this ok?
